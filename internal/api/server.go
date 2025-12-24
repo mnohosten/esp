@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/go-playground/validator/v10"
+	"github.com/mnohosten/esp/internal/dkim"
 )
 
 // Config holds API server configuration.
@@ -18,6 +19,7 @@ type Config struct {
 	ListenAddr  string        `mapstructure:"listen_addr"`
 	JWTSecret   string        `mapstructure:"jwt_secret"`
 	JWTExpiry   time.Duration `mapstructure:"jwt_expiry"`
+	APIKey      string        `mapstructure:"api_key"`
 	EnableCORS  bool          `mapstructure:"enable_cors"`
 	CORSOrigins []string      `mapstructure:"cors_origins"`
 	RateLimit   int           `mapstructure:"rate_limit"`
@@ -37,29 +39,47 @@ func DefaultConfig() Config {
 
 // Server is the REST API server.
 type Server struct {
-	router     chi.Router
-	config     Config
-	db         *sql.DB
-	logger     *slog.Logger
-	httpServer *http.Server
-	jwtAuth    *JWTAuth
-	validator  *validator.Validate
-	startTime  time.Time
+	router      chi.Router
+	config      Config
+	db          *sql.DB
+	logger      *slog.Logger
+	httpServer  *http.Server
+	jwtAuth     *JWTAuth
+	validator   *validator.Validate
+	startTime   time.Time
+	dkimManager *dkim.KeyManager
+	hostname    string
 }
 
 // New creates a new API server.
 func New(cfg Config, db *sql.DB, logger *slog.Logger) *Server {
+	jwtAuth := NewJWTAuth(cfg.JWTSecret, cfg.JWTExpiry)
+	if cfg.APIKey != "" {
+		jwtAuth.SetAPIKey(cfg.APIKey)
+		logger.Info("API key authentication enabled")
+	}
+
 	s := &Server{
 		config:    cfg,
 		db:        db,
 		logger:    logger,
-		jwtAuth:   NewJWTAuth(cfg.JWTSecret, cfg.JWTExpiry),
+		jwtAuth:   jwtAuth,
 		validator: validator.New(),
 		startTime: time.Now(),
 	}
 
 	s.setupRoutes()
 	return s
+}
+
+// SetDKIMManager sets the DKIM key manager.
+func (s *Server) SetDKIMManager(mgr *dkim.KeyManager) {
+	s.dkimManager = mgr
+}
+
+// SetHostname sets the mail server hostname.
+func (s *Server) SetHostname(hostname string) {
+	s.hostname = hostname
 }
 
 // setupRoutes configures all routes.

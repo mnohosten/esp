@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+// DKIMSigner is the interface for DKIM signing.
+type DKIMSigner interface {
+	Sign(content []byte, domain string) ([]byte, error)
+	Enabled() bool
+}
+
 // WorkerPool manages a pool of delivery workers.
 type WorkerPool struct {
 	manager    *Manager
@@ -22,6 +28,7 @@ type WorkerPool struct {
 	hostname   string
 	tlsConfig  *tls.Config
 	logger     *slog.Logger
+	dkimSigner DKIMSigner
 
 	mu      sync.Mutex
 	running bool
@@ -38,6 +45,11 @@ func NewWorkerPool(manager *Manager, workers int, hostname string, tlsConfig *tl
 		tlsConfig: tlsConfig,
 		logger:    logger.With("component", "queue.worker"),
 	}
+}
+
+// SetDKIMSigner sets the DKIM signer for outgoing messages.
+func (p *WorkerPool) SetDKIMSigner(signer DKIMSigner) {
+	p.dkimSigner = signer
 }
 
 // Start starts the worker pool.
@@ -189,6 +201,24 @@ func (p *WorkerPool) deliver(ctx context.Context, msg *Message) *DeliveryResult 
 			Success:   false,
 			Permanent: true,
 			Error:     fmt.Sprintf("failed to read message: %v", err),
+		}
+	}
+
+	// Sign with DKIM if signer is configured
+	if p.dkimSigner != nil && p.dkimSigner.Enabled() {
+		// Extract sender domain
+		senderParts := strings.Split(msg.Sender, "@")
+		if len(senderParts) == 2 {
+			senderDomain := senderParts[1]
+			signedContent, err := p.dkimSigner.Sign(content, senderDomain)
+			if err != nil {
+				p.logger.Warn("DKIM signing failed, sending unsigned",
+					"sender", msg.Sender,
+					"error", err,
+				)
+			} else {
+				content = signedContent
+			}
 		}
 	}
 

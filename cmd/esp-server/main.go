@@ -17,6 +17,7 @@ import (
 	"github.com/mnohosten/esp/internal/api"
 	"github.com/mnohosten/esp/internal/config"
 	"github.com/mnohosten/esp/internal/database"
+	"github.com/mnohosten/esp/internal/dkim"
 	"github.com/mnohosten/esp/internal/imap"
 	"github.com/mnohosten/esp/internal/logging"
 	"github.com/mnohosten/esp/internal/mailbox"
@@ -179,8 +180,35 @@ func runServer() error {
 	}
 	defer queueMgr.Stop(ctx)
 
+	// Initialize DKIM manager if enabled
+	var dkimManager *dkim.KeyManager
+	if cfg.Security.TLS.DKIM.Enabled {
+		var err error
+		// Extract key directory from key path pattern
+		keyDir := filepath.Dir(cfg.Security.TLS.DKIM.KeyPath)
+		dkimManager, err = dkim.NewKeyManager(keyDir, cfg.Security.TLS.DKIM.Selector, logger)
+		if err != nil {
+			return fmt.Errorf("failed to create DKIM manager: %w", err)
+		}
+		logger.Info("DKIM manager initialized",
+			"key_dir", keyDir,
+			"selector", cfg.Security.TLS.DKIM.Selector,
+		)
+	}
+
 	// Start queue worker pool for outbound delivery
 	workerPool := queue.NewWorkerPool(queueMgr, queueCfg.Workers, cfg.Server.SMTP.Hostname, tlsConfig, logger)
+
+	// Configure DKIM signing if enabled
+	if cfg.Security.TLS.DKIM.Enabled {
+		dkimSigner := smtppkg.NewDKIMSigner(cfg.Security.TLS.DKIM, logger)
+		workerPool.SetDKIMSigner(dkimSigner)
+		logger.Info("DKIM signing enabled",
+			"key_path", cfg.Security.TLS.DKIM.KeyPath,
+			"selector", cfg.Security.TLS.DKIM.Selector,
+		)
+	}
+
 	if err := workerPool.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start queue workers: %w", err)
 	}
@@ -240,11 +268,19 @@ func runServer() error {
 			ListenAddr:  cfg.Server.API.ListenAddr,
 			JWTSecret:   cfg.Server.API.JWTSecret,
 			JWTExpiry:   cfg.Server.API.JWTExpiry,
+			APIKey:      cfg.Server.API.APIKey,
 			EnableCORS:  cfg.Server.API.EnableCORS,
 			CORSOrigins: cfg.Server.API.CORSOrigins,
 			RateLimit:   cfg.Server.API.RateLimit,
 		}
 		apiServer := api.New(apiCfg, sqlDB, logger)
+
+		// Set DKIM manager and hostname for domain management
+		if dkimManager != nil {
+			apiServer.SetDKIMManager(dkimManager)
+		}
+		apiServer.SetHostname(cfg.Server.SMTP.Hostname)
+
 		go func() {
 			if err := apiServer.Start(ctx); err != nil {
 				logger.Error("API server error", "error", err)

@@ -62,6 +62,7 @@ type APIConfig struct {
 	ListenAddr  string        `mapstructure:"listen_addr"`
 	JWTSecret   string        `mapstructure:"jwt_secret"`
 	JWTExpiry   time.Duration `mapstructure:"jwt_expiry"`
+	APIKey      string        `mapstructure:"api_key"`
 	RateLimit   int           `mapstructure:"rate_limit"`
 	EnableCORS  bool          `mapstructure:"enable_cors"`
 	CORSOrigins []string      `mapstructure:"cors_origins"`
@@ -111,6 +112,14 @@ type TLSConfig struct {
 	ZeroSSLEABKey  string `mapstructure:"zerossl_eab_key"`
 	RenewBefore    time.Duration `mapstructure:"renew_before"`
 	CheckInterval  time.Duration `mapstructure:"check_interval"`
+	DKIM           DKIMConfig    `mapstructure:"dkim"`
+}
+
+// DKIMConfig defines DKIM signing settings
+type DKIMConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	KeyPath  string `mapstructure:"key_path"`  // Path pattern, e.g., /var/lib/rspamd/dkim/$domain.$selector.key
+	Selector string `mapstructure:"selector"`  // DKIM selector, typically "default"
 }
 
 // LoggingConfig defines logging settings

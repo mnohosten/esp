@@ -32,6 +32,7 @@ type Claims struct {
 type JWTAuth struct {
 	secret []byte
 	expiry time.Duration
+	apiKey string
 }
 
 // NewJWTAuth creates a new JWT authenticator.
@@ -40,6 +41,11 @@ func NewJWTAuth(secret string, expiry time.Duration) *JWTAuth {
 		secret: []byte(secret),
 		expiry: expiry,
 	}
+}
+
+// SetAPIKey sets an API key for admin access.
+func (j *JWTAuth) SetAPIKey(apiKey string) {
+	j.apiKey = apiKey
 }
 
 // GenerateToken generates a new JWT token.
@@ -90,25 +96,50 @@ func (j *JWTAuth) ValidateToken(tokenString string) (*Claims, error) {
 }
 
 // Middleware returns authentication middleware.
+// Supports both Bearer token (JWT) and X-API-Key header authentication.
 func (j *JWTAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing authorization header")
-			return
-		}
+		var claims *Claims
 
-		// Extract token from "Bearer <token>"
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid authorization header format")
-			return
-		}
+		// Check for API key first (admin access)
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey != "" {
+			if j.apiKey == "" {
+				respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "API key authentication not configured")
+				return
+			}
+			if apiKey != j.apiKey {
+				respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid API key")
+				return
+			}
+			// API key grants admin access
+			claims = &Claims{
+				UserID:   uuid.Nil,
+				Email:    "api@localhost",
+				DomainID: uuid.Nil,
+				IsAdmin:  true,
+			}
+		} else {
+			// Fall back to JWT authentication
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing authorization header")
+				return
+			}
 
-		claims, err := j.ValidateToken(parts[1])
-		if err != nil {
-			respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
-			return
+			// Extract token from "Bearer <token>"
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+				respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid authorization header format")
+				return
+			}
+
+			var err error
+			claims, err = j.ValidateToken(parts[1])
+			if err != nil {
+				respondError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
+				return
+			}
 		}
 
 		// Add claims to context

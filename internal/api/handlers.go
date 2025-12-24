@@ -1,12 +1,16 @@
 package api
 
 import (
+	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/mnohosten/esp/internal/dkim"
 )
 
 // Health handlers
@@ -124,8 +128,38 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // Domain handlers
 
 func (s *Server) handleListDomains(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement domain listing from database
-	respondJSON(w, http.StatusOK, []DomainResponse{})
+	query := `
+		SELECT id, name, enabled, dkim_selector, max_mailbox_size, max_message_size, created_at, updated_at
+		FROM domains
+		ORDER BY name
+	`
+
+	rows, err := s.db.QueryContext(r.Context(), query)
+	if err != nil {
+		s.logger.Error("failed to list domains", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to list domains")
+		return
+	}
+	defer rows.Close()
+
+	var domains []DomainResponse
+	for rows.Next() {
+		var d DomainResponse
+		var dkimSelector sql.NullString
+		if err := rows.Scan(&d.ID, &d.Name, &d.Enabled, &dkimSelector, &d.MaxMailboxSize, &d.MaxMessageSize, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			s.logger.Error("failed to scan domain", "error", err)
+			continue
+		}
+		if dkimSelector.Valid {
+			d.DKIMSelector = dkimSelector.String
+		}
+		domains = append(domains, d)
+	}
+
+	if domains == nil {
+		domains = []DomainResponse{}
+	}
+	respondJSON(w, http.StatusOK, domains)
 }
 
 func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +174,73 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement domain creation
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "domain creation not yet implemented")
+	// Normalize domain name
+	domainName := strings.ToLower(strings.TrimSpace(req.Name))
+
+	// Check if domain already exists
+	var exists bool
+	err := s.db.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM domains WHERE LOWER(name) = $1)", domainName).Scan(&exists)
+	if err != nil {
+		s.logger.Error("failed to check domain existence", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to check domain")
+		return
+	}
+	if exists {
+		respondError(w, http.StatusConflict, "DOMAIN_EXISTS", "domain already exists")
+		return
+	}
+
+	// Generate DKIM key if manager is configured
+	var dkimSelector string
+	if s.dkimManager != nil {
+		keyInfo, err := s.dkimManager.GenerateKey(domainName)
+		if err != nil {
+			s.logger.Error("failed to generate DKIM key", "domain", domainName, "error", err)
+			respondError(w, http.StatusInternalServerError, "DKIM_ERROR", "failed to generate DKIM key")
+			return
+		}
+		dkimSelector = keyInfo.Selector
+		s.logger.Info("DKIM key generated for domain", "domain", domainName, "selector", dkimSelector)
+	}
+
+	// Set defaults
+	maxMailboxSize := req.MaxMailboxSize
+	if maxMailboxSize == 0 {
+		maxMailboxSize = 1073741824 // 1GB default
+	}
+	maxMessageSize := req.MaxMessageSize
+	if maxMessageSize == 0 {
+		maxMessageSize = 26214400 // 25MB default
+	}
+
+	// Insert domain
+	domainID := uuid.New()
+	now := time.Now()
+
+	query := `
+		INSERT INTO domains (id, name, enabled, dkim_selector, max_mailbox_size, max_message_size, created_at, updated_at)
+		VALUES ($1, $2, true, $3, $4, $5, $6, $7)
+	`
+	_, err = s.db.ExecContext(r.Context(), query, domainID, domainName, dkimSelector, maxMailboxSize, maxMessageSize, now, now)
+	if err != nil {
+		s.logger.Error("failed to create domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to create domain")
+		return
+	}
+
+	resp := DomainResponse{
+		ID:             domainID,
+		Name:           domainName,
+		Enabled:        true,
+		DKIMSelector:   dkimSelector,
+		MaxMailboxSize: maxMailboxSize,
+		MaxMessageSize: maxMessageSize,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	s.logger.Info("domain created", "id", domainID, "name", domainName)
+	respondJSON(w, http.StatusCreated, resp)
 }
 
 func (s *Server) handleGetDomain(w http.ResponseWriter, r *http.Request) {
@@ -151,8 +250,32 @@ func (s *Server) handleGetDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement domain lookup
-	respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+	query := `
+		SELECT id, name, enabled, dkim_selector, max_mailbox_size, max_message_size, created_at, updated_at
+		FROM domains
+		WHERE id = $1
+	`
+
+	var d DomainResponse
+	var dkimSelector sql.NullString
+	err := s.db.QueryRowContext(r.Context(), query, domainID).Scan(
+		&d.ID, &d.Name, &d.Enabled, &dkimSelector, &d.MaxMailboxSize, &d.MaxMessageSize, &d.CreatedAt, &d.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+		return
+	}
+	if err != nil {
+		s.logger.Error("failed to get domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to get domain")
+		return
+	}
+
+	if dkimSelector.Valid {
+		d.DKIMSelector = dkimSelector.String
+	}
+
+	respondJSON(w, http.StatusOK, d)
 }
 
 func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +291,54 @@ func (s *Server) handleUpdateDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement domain update
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "domain update not yet implemented")
+	// Build dynamic update query
+	var updates []string
+	var args []interface{}
+	argNum := 1
+
+	if req.Enabled != nil {
+		updates = append(updates, fmt.Sprintf("enabled = $%d", argNum))
+		args = append(args, *req.Enabled)
+		argNum++
+	}
+	if req.MaxMailboxSize != nil {
+		updates = append(updates, fmt.Sprintf("max_mailbox_size = $%d", argNum))
+		args = append(args, *req.MaxMailboxSize)
+		argNum++
+	}
+	if req.MaxMessageSize != nil {
+		updates = append(updates, fmt.Sprintf("max_message_size = $%d", argNum))
+		args = append(args, *req.MaxMessageSize)
+		argNum++
+	}
+
+	if len(updates) == 0 {
+		respondError(w, http.StatusBadRequest, "NO_UPDATES", "no fields to update")
+		return
+	}
+
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argNum))
+	args = append(args, time.Now())
+	argNum++
+
+	args = append(args, domainID)
+	query := fmt.Sprintf("UPDATE domains SET %s WHERE id = $%d", strings.Join(updates, ", "), argNum)
+
+	result, err := s.db.ExecContext(r.Context(), query, args...)
+	if err != nil {
+		s.logger.Error("failed to update domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to update domain")
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+		return
+	}
+
+	// Return updated domain
+	s.handleGetDomain(w, r)
 }
 
 func (s *Server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
@@ -179,8 +348,36 @@ func (s *Server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement domain deletion
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "domain deletion not yet implemented")
+	// Get domain name for DKIM key deletion
+	var domainName string
+	err := s.db.QueryRowContext(r.Context(), "SELECT name FROM domains WHERE id = $1", domainID).Scan(&domainName)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+		return
+	}
+	if err != nil {
+		s.logger.Error("failed to get domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to get domain")
+		return
+	}
+
+	// Delete domain from database
+	_, err = s.db.ExecContext(r.Context(), "DELETE FROM domains WHERE id = $1", domainID)
+	if err != nil {
+		s.logger.Error("failed to delete domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to delete domain")
+		return
+	}
+
+	// Delete DKIM key
+	if s.dkimManager != nil {
+		if err := s.dkimManager.DeleteKey(domainName); err != nil {
+			s.logger.Warn("failed to delete DKIM key", "domain", domainName, "error", err)
+		}
+	}
+
+	s.logger.Info("domain deleted", "id", domainID, "name", domainName)
+	respondJSON(w, http.StatusOK, map[string]string{"message": "domain deleted"})
 }
 
 func (s *Server) handleGetDNSRecords(w http.ResponseWriter, r *http.Request) {
@@ -190,8 +387,64 @@ func (s *Server) handleGetDNSRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement DNS record generation
-	respondJSON(w, http.StatusOK, []DNSRecordResponse{})
+	// Get domain name
+	var domainName string
+	err := s.db.QueryRowContext(r.Context(), "SELECT name FROM domains WHERE id = $1", domainID).Scan(&domainName)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+		return
+	}
+	if err != nil {
+		s.logger.Error("failed to get domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to get domain")
+		return
+	}
+
+	hostname := s.hostname
+	if hostname == "" {
+		hostname = "mail." + domainName
+	}
+
+	records := []DNSRecordResponse{
+		// MX record
+		{
+			Type:     "MX",
+			Name:     domainName,
+			Value:    hostname,
+			Priority: 10,
+			TTL:      3600,
+		},
+		// SPF record
+		{
+			Type:  "TXT",
+			Name:  domainName,
+			Value: fmt.Sprintf("v=spf1 mx a:%s ~all", hostname),
+			TTL:   3600,
+		},
+	}
+
+	// Add DKIM record if key exists
+	if s.dkimManager != nil {
+		dnsName, dnsRecord, err := s.dkimManager.GetDNSRecord(domainName)
+		if err == nil {
+			records = append(records, DNSRecordResponse{
+				Type:  "TXT",
+				Name:  dnsName,
+				Value: dkim.FormatDNSRecordForDisplay(dnsRecord),
+				TTL:   3600,
+			})
+		}
+	}
+
+	// DMARC record
+	records = append(records, DNSRecordResponse{
+		Type:  "TXT",
+		Name:  "_dmarc." + domainName,
+		Value: fmt.Sprintf("v=DMARC1; p=quarantine; rua=mailto:postmaster@%s", domainName),
+		TTL:   3600,
+	})
+
+	respondJSON(w, http.StatusOK, records)
 }
 
 func (s *Server) handleRotateDKIM(w http.ResponseWriter, r *http.Request) {
@@ -201,8 +454,41 @@ func (s *Server) handleRotateDKIM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement DKIM rotation
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "DKIM rotation not yet implemented")
+	if s.dkimManager == nil {
+		respondError(w, http.StatusServiceUnavailable, "DKIM_DISABLED", "DKIM is not configured")
+		return
+	}
+
+	// Get domain name
+	var domainName string
+	err := s.db.QueryRowContext(r.Context(), "SELECT name FROM domains WHERE id = $1", domainID).Scan(&domainName)
+	if err == sql.ErrNoRows {
+		respondError(w, http.StatusNotFound, "NOT_FOUND", "domain not found")
+		return
+	}
+	if err != nil {
+		s.logger.Error("failed to get domain", "error", err)
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "failed to get domain")
+		return
+	}
+
+	// Rotate DKIM key
+	keyInfo, err := s.dkimManager.RotateKey(domainName)
+	if err != nil {
+		s.logger.Error("failed to rotate DKIM key", "domain", domainName, "error", err)
+		respondError(w, http.StatusInternalServerError, "DKIM_ERROR", "failed to rotate DKIM key")
+		return
+	}
+
+	s.logger.Info("DKIM key rotated", "domain", domainName, "selector", keyInfo.Selector)
+
+	// Return the new DNS record
+	respondJSON(w, http.StatusOK, map[string]any{
+		"message":    "DKIM key rotated successfully",
+		"selector":   keyInfo.Selector,
+		"dns_name":   keyInfo.DNSName,
+		"dns_record": dkim.FormatDNSRecordForDisplay(keyInfo.DNSRecord),
+	})
 }
 
 // User handlers

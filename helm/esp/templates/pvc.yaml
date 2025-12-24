@@ -1,0 +1,35 @@
+{{- if .Values.persistence.mail.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "esp.fullname" . }}-mail
+  labels:
+    {{- include "esp.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.mail.accessMode }}
+  {{- if .Values.persistence.mail.storageClass }}
+  storageClassName: {{ .Values.persistence.mail.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.mail.size }}
+{{- end }}
+---
+{{- if .Values.persistence.certs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "esp.fullname" . }}-certs
+  labels:
+    {{- include "esp.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.certs.accessMode }}
+  {{- if .Values.persistence.certs.storageClass }}
+  storageClassName: {{ .Values.persistence.certs.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.certs.size }}
+{{- end }}

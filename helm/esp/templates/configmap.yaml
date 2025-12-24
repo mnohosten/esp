@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "esp.fullname" . }}-config
+  labels:
+    {{- include "esp.labels" . | nindent 4 }}
+data:
+  server.yaml: |
+    server:
+      hostname: {{ .Values.config.server.hostname | quote }}
+      log_level: {{ .Values.config.server.log_level | quote }}
+
+    smtp:
+      enabled: {{ .Values.config.smtp.enabled }}
+      port: {{ .Values.config.smtp.port }}
+      tls_port: {{ .Values.config.smtp.tls_port }}
+      submission_port: {{ .Values.config.smtp.submission_port }}
+      max_message_size: {{ .Values.config.smtp.max_message_size }}
+      max_recipients: {{ .Values.config.smtp.max_recipients }}
+
+    imap:
+      enabled: {{ .Values.config.imap.enabled }}
+      port: {{ .Values.config.imap.port }}
+      tls_port: {{ .Values.config.imap.tls_port }}
+
+    api:
+      enabled: {{ .Values.config.api.enabled }}
+      port: {{ .Values.config.api.port }}
+
+    storage:
+      maildir:
+        path: /var/mail/esp
+      database:
+        host: "${ESP_STORAGE_DATABASE_HOST}"
+        port: "${ESP_STORAGE_DATABASE_PORT}"
+        name: "${ESP_STORAGE_DATABASE_NAME}"
+        user: "${ESP_STORAGE_DATABASE_USER}"
+        password: "${ESP_STORAGE_DATABASE_PASSWORD}"
+        sslmode: {{ .Values.config.database.sslmode | quote }}
+
+    {{- if .Values.config.filters.rspamd.enabled }}
+    filters:
+      rspamd:
+        enabled: true
+        url: {{ .Values.config.filters.rspamd.url | quote }}
+    {{- end }}
+
+    {{- if .Values.config.filters.clamav.enabled }}
+      clamav:
+        enabled: true
+        address: {{ .Values.config.filters.clamav.address | quote }}
+    {{- end }}
+
+    {{- if .Values.config.llm.enabled }}
+    llm:
+      enabled: true
+      provider: {{ .Values.config.llm.provider | quote }}
+      model: {{ .Values.config.llm.model | quote }}
+    {{- end }}

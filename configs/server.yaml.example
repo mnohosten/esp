@@ -1,0 +1,173 @@
+# ESP Server Configuration
+# Copy this file to server.yaml and adjust values as needed
+
+server:
+  smtp:
+    enabled: true
+    listen_addr: ":25"
+    submission_addr: ":587"
+    implicit_tls_addr: ":465"
+    hostname: "mail.example.com"  # REQUIRED: Your mail server hostname
+    max_message_size: 26214400    # 25MB
+    max_recipients: 100
+    read_timeout: 60s
+    write_timeout: 60s
+    require_tls: false
+
+    # Rate limiting
+    max_connections_per_ip: 10
+    max_messages_per_minute: 30
+
+    # Outbound queue settings
+    queue_workers: 4
+    retry_intervals:
+      - 5m
+      - 15m
+      - 30m
+      - 1h
+      - 4h
+      - 8h
+      - 24h
+    max_retries: 7
+    bounce_after: 48h
+
+  imap:
+    enabled: true
+    listen_addr: ":143"
+    implicit_tls_addr: ":993"
+    read_timeout: 30m
+    write_timeout: 60s
+    idle_timeout: 30m
+    idle_poll_interval: 2m
+    max_connections: 1000
+    max_connections_per_user: 10
+
+  api:
+    enabled: true
+    listen_addr: ":8080"
+    jwt_secret: "CHANGE-THIS-TO-A-SECURE-RANDOM-STRING-AT-LEAST-32-CHARS"  # REQUIRED
+    jwt_expiry: 24h
+    rate_limit: 100
+    enable_cors: true
+    cors_origins:
+      - "http://localhost:3000"
+
+storage:
+  database:
+    host: localhost
+    port: 5432
+    user: esp
+    password: esp_password  # REQUIRED: Change in production
+    database: esp
+    ssl_mode: prefer
+    max_connections: 25
+    max_idle_conns: 5
+    conn_max_lifetime: 1h
+
+  maildir:
+    base_path: /var/mail/esp
+    dir_mode: 0750
+    file_mode: 0640
+
+security:
+  tls:
+    # Option 1: Manual certificates
+    cert_file: ""
+    key_file: ""
+
+    # Option 2: Automatic certificates (Let's Encrypt / ZeroSSL)
+    auto_tls: false
+    acme_email: ""  # Required if auto_tls is true
+    acme_provider: "letsencrypt"  # or "zerossl"
+    acme_dir: "/var/lib/esp/certs"
+    acme_staging: false  # Use true for testing
+
+    # ZeroSSL EAB credentials (only if using ZeroSSL)
+    zerossl_eab_kid: ""
+    zerossl_eab_key: ""
+
+    # Certificate renewal
+    renew_before: 720h  # 30 days
+    check_interval: 24h
+
+logging:
+  level: info      # debug, info, warn, error
+  format: json     # json, text
+  output: stdout   # stdout, stderr, or file path
+  add_source: false
+
+filters:
+  enabled: true
+  fail_open: true  # Continue on filter error
+
+  rspamd:
+    enabled: false
+    url: "http://localhost:11333"
+    password: ""
+    timeout: 30s
+    reject_score: 15.0
+    quarantine_score: 6.0
+    add_headers: true
+
+  clamav:
+    enabled: false
+    address: "tcp://localhost:3310"
+    timeout: 60s
+
+  ratelimit:
+    enabled: true
+    ip_messages_per_minute: 30
+    ip_messages_per_hour: 300
+    sender_messages_per_minute: 10
+    sender_messages_per_hour: 100
+    recipient_messages_per_minute: 100
+
+  llm:
+    enabled: false
+    provider: "openai"  # openai, anthropic, ollama
+    model: "gpt-4o-mini"
+    min_confidence: 0.7
+    max_content_length: 4000
+    skip_spam: true
+    timeout: 30s
+
+    openai:
+      api_key: ""  # Required if provider is openai
+      org_id: ""
+      base_url: ""  # For Azure OpenAI
+
+    anthropic:
+      api_key: ""  # Required if provider is anthropic
+
+    ollama:
+      endpoint: "http://localhost:11434"
+
+    # Custom categories (optional, overrides defaults)
+    # categories:
+    #   - name: "primary"
+    #     description: "Important emails requiring attention"
+    #     folder: "INBOX"
+    #     priority: 1
+    #   - name: "promotions"
+    #     description: "Marketing and promotional emails"
+    #     folder: "Promotions"
+    #     priority: 2
+
+events:
+  workers: 4
+  queue_size: 1000
+
+  audit:
+    enabled: true
+    retention_days: 90
+
+  webhooks:
+    enabled: true
+    timeout: 30s
+    max_retries: 5
+    retry_delays:
+      - 1m
+      - 5m
+      - 15m
+      - 1h
+      - 4h

@@ -1,0 +1,62 @@
+# Binaries
+esp-server
+esp-cli
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+!*.key.example
+
+# Local configuration
+configs/server.yaml
+!configs/server.yaml.example
+
+# Data directories
+/data/
+/var/
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Build artifacts
+dist/
+build/
+
+# Dependency directories
+vendor/
+
+# Air live reload
+tmp/

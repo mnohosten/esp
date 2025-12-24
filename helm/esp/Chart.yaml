@@ -1,0 +1,22 @@
+apiVersion: v2
+name: esp
+description: ESP - Email Service Platform Helm Chart
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - email
+  - smtp
+  - imap
+  - mail-server
+maintainers:
+  - name: ESP Team
+    email: support@example.com
+home: https://github.com/mnohosten/esp
+sources:
+  - https://github.com/mnohosten/esp
+dependencies:
+  - name: postgresql
+    version: "13.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

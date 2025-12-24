@@ -1,0 +1,918 @@
+openapi: 3.0.3
+info:
+  title: ESP - Email Service Platform API
+  version: 1.0.0
+  description: |
+    REST API for managing the ESP email server.
+
+    ## Authentication
+    Most endpoints require JWT authentication. Obtain a token via `/auth/login` and include it in the `Authorization` header as `Bearer <token>`.
+
+    ## Rate Limiting
+    API requests are rate-limited. Check the `X-RateLimit-*` headers for current limits.
+  contact:
+    name: ESP Support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+  - url: https://api.example.com/api/v1
+    description: Production
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Authentication
+    description: User authentication endpoints
+  - name: Domains
+    description: Domain management
+  - name: Users
+    description: User management
+  - name: Mailboxes
+    description: Mailbox management
+  - name: Messages
+    description: Message operations
+  - name: Aliases
+    description: Email alias management
+  - name: Queue
+    description: Mail queue management
+  - name: System
+    description: System information and health
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /auth/login:
+    post:
+      summary: Authenticate user
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successful authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /domains:
+    get:
+      summary: List all domains
+      tags: [Domains]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: List of domains
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      summary: Create a new domain
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDomainRequest'
+      responses:
+        '201':
+          description: Domain created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /domains/{id}:
+    get:
+      summary: Get domain by ID
+      tags: [Domains]
+      parameters:
+        - $ref: '#/components/parameters/DomainId'
+      responses:
+        '200':
+          description: Domain details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update domain
+      tags: [Domains]
+      parameters:
+        - $ref: '#/components/parameters/DomainId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDomainRequest'
+      responses:
+        '200':
+          description: Domain updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete domain
+      tags: [Domains]
+      parameters:
+        - $ref: '#/components/parameters/DomainId'
+      responses:
+        '204':
+          description: Domain deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /domains/{id}/verify:
+    post:
+      summary: Verify domain DNS records
+      tags: [Domains]
+      parameters:
+        - $ref: '#/components/parameters/DomainId'
+      responses:
+        '200':
+          description: Verification results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainVerification'
+
+  /users:
+    get:
+      summary: List users
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: domain_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+
+    post:
+      summary: Create user
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /users/{id}:
+    get:
+      summary: Get user by ID
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update user
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+    delete:
+      summary: Delete user
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: User deleted
+
+  /users/{id}/password:
+    put:
+      summary: Change user password
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Password changed
+
+  /mailboxes/{id}/messages:
+    get:
+      summary: List messages in mailbox
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/MailboxId'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+
+  /messages/{id}:
+    get:
+      summary: Get message by ID
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Message details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+
+    delete:
+      summary: Delete message
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '204':
+          description: Message deleted
+
+  /messages/{id}/raw:
+    get:
+      summary: Get raw message content
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Raw message
+          content:
+            message/rfc822:
+              schema:
+                type: string
+                format: binary
+
+  /aliases:
+    get:
+      summary: List aliases
+      tags: [Aliases]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: List of aliases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AliasList'
+
+    post:
+      summary: Create alias
+      tags: [Aliases]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAliasRequest'
+      responses:
+        '201':
+          description: Alias created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+
+  /aliases/{id}:
+    delete:
+      summary: Delete alias
+      tags: [Aliases]
+      parameters:
+        - $ref: '#/components/parameters/AliasId'
+      responses:
+        '204':
+          description: Alias deleted
+
+  /queue:
+    get:
+      summary: List queued messages
+      tags: [Queue]
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, deferred, failed]
+      responses:
+        '200':
+          description: Queue entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueList'
+
+  /queue/{id}/retry:
+    post:
+      summary: Retry queued message
+      tags: [Queue]
+      parameters:
+        - $ref: '#/components/parameters/QueueId'
+      responses:
+        '204':
+          description: Message queued for retry
+
+  /queue/{id}:
+    delete:
+      summary: Remove from queue
+      tags: [Queue]
+      parameters:
+        - $ref: '#/components/parameters/QueueId'
+      responses:
+        '204':
+          description: Message removed from queue
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    DomainId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    MailboxId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    MessageId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    AliasId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    QueueId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+        uptime:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+              message:
+                type: string
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        token_type:
+          type: string
+          default: Bearer
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    Domain:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        enabled:
+          type: boolean
+        catch_all_user_id:
+          type: string
+          format: uuid
+          description: User ID receiving catch-all emails
+        catch_all_email:
+          type: string
+          format: email
+          description: Email address of catch-all user
+        max_users:
+          type: integer
+        max_aliases:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DomainList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Domain'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    CreateDomainRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}$'
+        enabled:
+          type: boolean
+          default: true
+        max_users:
+          type: integer
+          default: 100
+        max_aliases:
+          type: integer
+          default: 500
+
+    UpdateDomainRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        catch_all_user_id:
+          type: string
+          format: uuid
+          description: User ID to receive all emails sent to non-existent addresses on this domain
+        max_users:
+          type: integer
+        max_aliases:
+          type: integer
+
+    DomainVerification:
+      type: object
+      properties:
+        mx_valid:
+          type: boolean
+        spf_valid:
+          type: boolean
+        dkim_valid:
+          type: boolean
+        dmarc_valid:
+          type: boolean
+        details:
+          type: object
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        domain_id:
+          type: string
+          format: uuid
+        enabled:
+          type: boolean
+        is_admin:
+          type: boolean
+        quota:
+          type: integer
+        used_quota:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    UserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    CreateUserRequest:
+      type: object
+      required: [email, password, domain_id]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        domain_id:
+          type: string
+          format: uuid
+        quota:
+          type: integer
+          default: 1073741824
+        is_admin:
+          type: boolean
+          default: false
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        quota:
+          type: integer
+        is_admin:
+          type: boolean
+
+    ChangePasswordRequest:
+      type: object
+      required: [new_password]
+      properties:
+        current_password:
+          type: string
+        new_password:
+          type: string
+          minLength: 8
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        mailbox_id:
+          type: string
+          format: uuid
+        uid:
+          type: integer
+        message_id:
+          type: string
+        from:
+          type: string
+        to:
+          type: array
+          items:
+            type: string
+        subject:
+          type: string
+        date:
+          type: string
+          format: date-time
+        size:
+          type: integer
+        flags:
+          type: array
+          items:
+            type: string
+        headers:
+          type: object
+
+    MessageList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    Alias:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          format: email
+        destination:
+          type: string
+          format: email
+        domain_id:
+          type: string
+          format: uuid
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    AliasList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alias'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+
+    CreateAliasRequest:
+      type: object
+      required: [source, destination, domain_id]
+      properties:
+        source:
+          type: string
+          format: email
+        destination:
+          type: string
+          format: email
+        domain_id:
+          type: string
+          format: uuid
+
+    QueueEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        from:
+          type: string
+        to:
+          type: string
+        status:
+          type: string
+          enum: [pending, deferred, failed]
+        attempts:
+          type: integer
+        last_error:
+          type: string
+        next_retry:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    QueueList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueEntry'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer

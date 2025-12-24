@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "esp.fullname" . }}
+  labels:
+    {{- include "esp.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "esp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "esp.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "esp.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: smtp
+              containerPort: {{ .Values.service.ports.smtp }}
+              protocol: TCP
+            - name: smtps
+              containerPort: {{ .Values.service.ports.smtps }}
+              protocol: TCP
+            - name: submission
+              containerPort: {{ .Values.service.ports.submission }}
+              protocol: TCP
+            - name: imap
+              containerPort: {{ .Values.service.ports.imap }}
+              protocol: TCP
+            - name: imaps
+              containerPort: {{ .Values.service.ports.imaps }}
+              protocol: TCP
+            - name: api
+              containerPort: {{ .Values.service.ports.api }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          env:
+            - name: ESP_STORAGE_DATABASE_HOST
+              value: {{ include "esp.databaseHost" . | quote }}
+            - name: ESP_STORAGE_DATABASE_PORT
+              value: {{ include "esp.databasePort" . | quote }}
+            - name: ESP_STORAGE_DATABASE_NAME
+              value: {{ include "esp.databaseName" . | quote }}
+            - name: ESP_STORAGE_DATABASE_USER
+              value: {{ include "esp.databaseUser" . | quote }}
+            - name: ESP_STORAGE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "esp.fullname" . }}-db
+                  key: password
+            - name: ESP_API_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "esp.fullname" . }}-jwt
+                  key: secret
+          volumeMounts:
+            - name: config
+              mountPath: /etc/esp
+              readOnly: true
+            - name: mail
+              mountPath: /var/mail/esp
+            - name: certs
+              mountPath: /var/lib/esp/certs
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "esp.fullname" . }}-config
+        - name: mail
+          {{- if .Values.persistence.mail.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "esp.fullname" . }}-mail
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: certs
+          {{- if .Values.persistence.certs.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "esp.fullname" . }}-certs
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,153 @@
+# Default values for ESP
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/mnohosten/esp
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  ports:
+    smtp: 25
+    smtps: 465
+    submission: 587
+    imap: 143
+    imaps: 993
+    api: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: mail.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+persistence:
+  mail:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+  certs:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 100Mi
+
+config:
+  server:
+    hostname: mail.example.com
+    log_level: info
+
+  smtp:
+    enabled: true
+    port: 25
+    tls_port: 465
+    submission_port: 587
+    max_message_size: 26214400
+    max_recipients: 100
+
+  imap:
+    enabled: true
+    port: 143
+    tls_port: 993
+
+  api:
+    enabled: true
+    port: 8080
+    jwt_secret: ""  # Set via secret
+
+  database:
+    host: ""  # Set if using external database
+    port: 5432
+    name: esp
+    user: esp
+    password: ""  # Set via secret
+    sslmode: prefer
+
+  filters:
+    rspamd:
+      enabled: false
+      url: http://rspamd:11333
+    clamav:
+      enabled: false
+      address: clamav:3310
+
+  llm:
+    enabled: false
+    provider: ""
+    model: ""
+
+# PostgreSQL subchart configuration
+postgresql:
+  enabled: true
+  auth:
+    username: esp
+    password: ""  # Set in secrets
+    database: esp
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# External database (when postgresql.enabled=false)
+externalDatabase:
+  host: ""
+  port: 5432
+  user: esp
+  password: ""
+  database: esp
+  existingSecret: ""
+  existingSecretPasswordKey: password

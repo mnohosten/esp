@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/spf13/cobra"
@@ -18,6 +20,7 @@ import (
 	"github.com/mnohosten/esp/internal/imap"
 	"github.com/mnohosten/esp/internal/logging"
 	"github.com/mnohosten/esp/internal/mailbox"
+	"github.com/mnohosten/esp/internal/queue"
 	smtppkg "github.com/mnohosten/esp/internal/smtp"
 	"github.com/mnohosten/esp/internal/storage/maildir"
 	tlspkg "github.com/mnohosten/esp/internal/tls"
@@ -143,12 +146,65 @@ func runServer() error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Initialize queue manager for outbound delivery
+	queueDir := filepath.Join(cfg.Storage.Maildir.BasePath, "queue")
+	queueCfg := queue.ManagerConfig{
+		Workers: cfg.Server.SMTP.QueueWorkers,
+		RetryIntervals: []time.Duration{
+			5 * time.Minute,
+			15 * time.Minute,
+			30 * time.Minute,
+			1 * time.Hour,
+			4 * time.Hour,
+			8 * time.Hour,
+			24 * time.Hour,
+		},
+		MaxRetries:   cfg.Server.SMTP.MaxRetries,
+		BounceAfter:  cfg.Server.SMTP.BounceAfter,
+		PollInterval: 10 * time.Second,
+	}
+	if queueCfg.Workers == 0 {
+		queueCfg.Workers = 4 // Default
+	}
+	if queueCfg.MaxRetries == 0 {
+		queueCfg.MaxRetries = 7 // Default
+	}
+	if queueCfg.BounceAfter == 0 {
+		queueCfg.BounceAfter = 48 * time.Hour // Default
+	}
+
+	queueMgr := queue.NewManager(db.Pool, queueCfg, logger)
+	if err := queueMgr.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start queue manager: %w", err)
+	}
+	defer queueMgr.Stop(ctx)
+
+	// Start queue worker pool for outbound delivery
+	workerPool := queue.NewWorkerPool(queueMgr, queueCfg.Workers, cfg.Server.SMTP.Hostname, tlsConfig, logger)
+	if err := workerPool.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start queue workers: %w", err)
+	}
+	defer workerPool.Stop(ctx)
+
+	logger.Info("queue system started",
+		"workers", queueCfg.Workers,
+		"queue_dir", queueDir,
+	)
+
 	// Start SMTP server if enabled
 	if cfg.Server.SMTP.Enabled {
 		// Create database-backed authenticator for SMTP
-		dbAuth := smtppkg.NewDBUserAuth(db)
+		dbAuth := smtppkg.NewDBUserAuth(db, logger)
 		smtpAuth := smtppkg.NewAuthenticator(dbAuth, logger)
-		smtpBackend := smtppkg.NewBackend(cfg.Server.SMTP, logger, smtppkg.WithAuthenticator(smtpAuth))
+
+		// Create local delivery handler
+		localDeliverer := smtppkg.NewDBLocalDeliverer(db, maildirStore, logger)
+
+		smtpBackend := smtppkg.NewBackend(cfg.Server.SMTP, logger,
+			smtppkg.WithAuthenticator(smtpAuth),
+			smtppkg.WithQueueManager(queueMgr, queueDir),
+			smtppkg.WithLocalDeliverer(localDeliverer),
+		)
 		smtpServer := smtppkg.New(cfg.Server.SMTP, smtpBackend, tlsConfig, logger)
 		if err := smtpServer.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start SMTP server: %w", err)

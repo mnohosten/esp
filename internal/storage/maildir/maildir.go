@@ -198,9 +198,10 @@ func (m *Maildir) CreateMailbox(ctx context.Context, domain, localpart, mailboxN
 		"path", mbPath,
 	)
 
-	// Check if mailbox already exists
+	// If mailbox already exists on disk, that's OK - idempotent operation
 	if _, err := os.Stat(mbPath); err == nil {
-		return fmt.Errorf("mailbox already exists: %s", mailboxName)
+		m.logger.Debug("mailbox already exists on disk, skipping creation", "path", mbPath)
+		return nil
 	}
 
 	return m.createMaildirDirs(mbPath)

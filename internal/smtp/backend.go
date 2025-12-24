@@ -1,24 +1,29 @@
 package smtp
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/emersion/go-smtp"
 	"github.com/mnohosten/esp/internal/config"
+	"github.com/mnohosten/esp/internal/queue"
 )
+
+// LocalDeliverer handles local email delivery.
+type LocalDeliverer interface {
+	// DeliverLocal delivers a message to a local recipient.
+	// Returns true if delivery was successful, false if recipient not found.
+	DeliverLocal(ctx context.Context, sender, recipient string, content []byte) (bool, error)
+}
 
 // Backend implements smtp.Backend for ESP.
 type Backend struct {
-	config        config.SMTPConfig
-	logger        *slog.Logger
-	authenticator *Authenticator
-
-	// TODO: Add these dependencies as they are implemented:
-	// domains     *domain.Manager
-	// users       *user.Store
-	// queue       *queue.Manager
-	// filterChain *filter.Chain
-	// eventBus    *event.Bus
+	config         config.SMTPConfig
+	logger         *slog.Logger
+	authenticator  *Authenticator
+	queueMgr       *queue.Manager
+	queueDir       string
+	localDeliverer LocalDeliverer
 }
 
 // BackendOption is a functional option for configuring the Backend.
@@ -28,6 +33,21 @@ type BackendOption func(*Backend)
 func WithAuthenticator(auth *Authenticator) BackendOption {
 	return func(b *Backend) {
 		b.authenticator = auth
+	}
+}
+
+// WithQueueManager sets the queue manager for the backend.
+func WithQueueManager(mgr *queue.Manager, queueDir string) BackendOption {
+	return func(b *Backend) {
+		b.queueMgr = mgr
+		b.queueDir = queueDir
+	}
+}
+
+// WithLocalDeliverer sets the local delivery handler.
+func WithLocalDeliverer(ld LocalDeliverer) BackendOption {
+	return func(b *Backend) {
+		b.localDeliverer = ld
 	}
 }
 
@@ -72,4 +92,19 @@ func (b *Backend) Logger() *slog.Logger {
 // Authenticator returns the authenticator, or nil if not configured.
 func (b *Backend) Authenticator() *Authenticator {
 	return b.authenticator
+}
+
+// QueueManager returns the queue manager, or nil if not configured.
+func (b *Backend) QueueManager() *queue.Manager {
+	return b.queueMgr
+}
+
+// QueueDir returns the queue directory path.
+func (b *Backend) QueueDir() string {
+	return b.queueDir
+}
+
+// LocalDeliverer returns the local delivery handler, or nil if not configured.
+func (b *Backend) LocalDeliverer() LocalDeliverer {
+	return b.localDeliverer
 }

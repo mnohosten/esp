@@ -131,20 +131,23 @@ func (m *Manager) Dequeue(ctx context.Context) (*Message, error) {
 		SET status = $1, last_attempt = NOW()
 		WHERE id = (
 			SELECT id FROM queue
-			WHERE status = $2
+			WHERE status IN ($2, $3)
 			AND next_attempt <= NOW()
 			AND (expires_at IS NULL OR expires_at > NOW())
 			ORDER BY priority DESC, next_attempt ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, message_id, sender, recipient, message_path, size,
-			status, priority, attempts, last_attempt, next_attempt, last_error,
-			created_at, expires_at
+		RETURNING id, COALESCE(message_id, ''), sender, recipient,
+			COALESCE(message_path, ''), COALESCE(size, 0),
+			status, priority, COALESCE(attempts, 0),
+			COALESCE(last_attempt, NOW()), COALESCE(next_attempt, NOW()),
+			COALESCE(last_error, ''),
+			created_at, COALESCE(expires_at, NOW() + INTERVAL '48 hours')
 	`
 
 	msg := &Message{}
-	err := m.pool.QueryRow(ctx, query, StatusProcessing, StatusPending).Scan(
+	err := m.pool.QueryRow(ctx, query, StatusProcessing, StatusPending, StatusDeferred).Scan(
 		&msg.ID,
 		&msg.MessageID,
 		&msg.Sender,
@@ -280,9 +283,12 @@ func (m *Manager) Fail(ctx context.Context, msgID string, reason string) error {
 // GetMessage retrieves a message by ID.
 func (m *Manager) GetMessage(ctx context.Context, msgID string) (*Message, error) {
 	query := `
-		SELECT id, message_id, sender, recipient, message_path, size,
-			status, priority, attempts, last_attempt, next_attempt, last_error,
-			created_at, expires_at
+		SELECT id, COALESCE(message_id, ''), sender, recipient,
+			COALESCE(message_path, ''), COALESCE(size, 0),
+			status, priority, COALESCE(attempts, 0),
+			COALESCE(last_attempt, NOW()), COALESCE(next_attempt, NOW()),
+			COALESCE(last_error, ''),
+			created_at, COALESCE(expires_at, NOW() + INTERVAL '48 hours')
 		FROM queue WHERE id = $1
 	`
 
@@ -317,9 +323,12 @@ func (m *Manager) GetMessage(ctx context.Context, msgID string) (*Message, error
 // ListPending returns pending messages.
 func (m *Manager) ListPending(ctx context.Context, limit int) ([]*Message, error) {
 	query := `
-		SELECT id, message_id, sender, recipient, message_path, size,
-			status, priority, attempts, last_attempt, next_attempt, last_error,
-			created_at, expires_at
+		SELECT id, COALESCE(message_id, ''), sender, recipient,
+			COALESCE(message_path, ''), COALESCE(size, 0),
+			status, priority, COALESCE(attempts, 0),
+			COALESCE(last_attempt, NOW()), COALESCE(next_attempt, NOW()),
+			COALESCE(last_error, ''),
+			created_at, COALESCE(expires_at, NOW() + INTERVAL '48 hours')
 		FROM queue
 		WHERE status IN ($1, $2)
 		ORDER BY priority DESC, next_attempt ASC

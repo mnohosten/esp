@@ -145,7 +145,10 @@ func runServer() error {
 
 	// Start SMTP server if enabled
 	if cfg.Server.SMTP.Enabled {
-		smtpBackend := smtppkg.NewBackend(cfg.Server.SMTP, logger)
+		// Create database-backed authenticator for SMTP
+		dbAuth := smtppkg.NewDBUserAuth(db)
+		smtpAuth := smtppkg.NewAuthenticator(dbAuth, logger)
+		smtpBackend := smtppkg.NewBackend(cfg.Server.SMTP, logger, smtppkg.WithAuthenticator(smtpAuth))
 		smtpServer := smtppkg.New(cfg.Server.SMTP, smtpBackend, tlsConfig, logger)
 		if err := smtpServer.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start SMTP server: %w", err)

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-playground/validator/v10"
 	"github.com/mnohosten/esp/internal/dkim"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 )
 
 // Config holds API server configuration.
@@ -109,8 +110,16 @@ func (s *Server) setupRoutes() {
 	// Health check (no auth)
 	r.Get("/health", s.handleHealth)
 
+	// Swagger UI (no auth)
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/api/v1/openapi.yaml"),
+	))
+
 	// API routes
 	r.Route("/api/v1", func(r chi.Router) {
+		// OpenAPI spec (no auth)
+		r.Get("/openapi.yaml", s.handleOpenAPISpec)
+
 		// Auth routes (no auth required)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", s.handleLogin)

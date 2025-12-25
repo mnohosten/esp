@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/mnohosten/esp/internal/dkim"
 )
+
+//go:embed openapi.yaml
+var openAPISpec []byte
 
 // Health handlers
 
@@ -48,6 +52,14 @@ func (s *Server) handleAdminHealth(w http.ResponseWriter, r *http.Request) {
 		Uptime:   time.Since(s.startTime).String(),
 		Services: services,
 	})
+}
+
+// OpenAPI spec handler
+
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	w.WriteHeader(http.StatusOK)
+	w.Write(openAPISpec)
 }
 
 // Auth handlers

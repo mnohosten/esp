@@ -18,13 +18,16 @@ import (
 	"github.com/mnohosten/esp/internal/config"
 	"github.com/mnohosten/esp/internal/database"
 	"github.com/mnohosten/esp/internal/dkim"
+	"github.com/mnohosten/esp/internal/dmarc"
 	"github.com/mnohosten/esp/internal/imap"
 	"github.com/mnohosten/esp/internal/logging"
 	"github.com/mnohosten/esp/internal/mailbox"
+	"github.com/mnohosten/esp/internal/mtasts"
 	"github.com/mnohosten/esp/internal/queue"
 	smtppkg "github.com/mnohosten/esp/internal/smtp"
 	"github.com/mnohosten/esp/internal/storage/maildir"
 	tlspkg "github.com/mnohosten/esp/internal/tls"
+	"github.com/mnohosten/esp/internal/tlsrpt"
 	"github.com/mnohosten/esp/internal/version"
 )
 
@@ -196,8 +199,87 @@ func runServer() error {
 		)
 	}
 
+	// Initialize reporting components
+	var dmarcStore *dmarc.Store
+	var tlsrptStore *tlsrpt.Store
+	var tlsrptTracker *tlsrpt.Tracker
+	var mtastsManager *mtasts.Manager
+
+	// Initialize DMARC reporting if enabled
+	if cfg.Reporting.DMARC.Enabled {
+		dmarcStore = dmarc.NewStore(db.Pool, logger)
+		// TODO: Wire collector into SMTP verifier for auth result collection
+		// dmarcCollector := dmarc.NewCollector(dmarcStore, logger)
+		dmarcGenerator := dmarc.NewGenerator(dmarcStore, logger, dmarc.GeneratorConfig{
+			OrgName:  cfg.Reporting.DMARC.OrgName,
+			Email:    cfg.Reporting.DMARC.ContactEmail,
+			Hostname: cfg.Server.SMTP.Hostname,
+		})
+		dmarcParser := dmarc.NewParser(logger)
+		dmarcWorker := dmarc.NewWorker(dmarcStore, dmarcGenerator, dmarcParser, logger, dmarc.WorkerConfig{
+			Enabled:    cfg.Reporting.DMARC.SendReports,
+			ReportTime: cfg.Reporting.DMARC.ReportTime,
+		})
+		if cfg.Reporting.DMARC.SendReports {
+			if err := dmarcWorker.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start DMARC worker: %w", err)
+			}
+			defer dmarcWorker.Stop(ctx)
+		}
+		logger.Info("DMARC reporting enabled",
+			"send_reports", cfg.Reporting.DMARC.SendReports,
+		)
+	}
+
+	// Initialize MTA-STS if enabled
+	if cfg.Reporting.MTASTS.Enabled {
+		mtastsManager = mtasts.NewManager(db.Pool, logger, mtasts.ManagerConfig{
+			Enabled:        true,
+			MemoryCacheTTL: cfg.Reporting.MTASTS.CacheTTL,
+		})
+		if err := mtastsManager.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start MTA-STS manager: %w", err)
+		}
+		defer mtastsManager.Stop(ctx)
+		logger.Info("MTA-STS policy enforcement enabled")
+	}
+
+	// Initialize TLS-RPT reporting if enabled
+	if cfg.Reporting.TLSRPT.Enabled {
+		tlsrptStore = tlsrpt.NewStore(db.Pool, logger)
+		tlsrptTracker = tlsrpt.NewTracker(tlsrptStore, logger)
+		tlsrptGenerator := tlsrpt.NewGenerator(tlsrptStore, logger, tlsrpt.GeneratorConfig{
+			OrgName:     cfg.Reporting.DMARC.OrgName,
+			ContactInfo: cfg.Reporting.DMARC.ContactEmail,
+			Hostname:    cfg.Server.SMTP.Hostname,
+		})
+		tlsrptParser := tlsrpt.NewParser(logger)
+		tlsrptWorker := tlsrpt.NewWorker(tlsrptStore, tlsrptGenerator, tlsrptParser, logger, tlsrpt.WorkerConfig{
+			Enabled:    cfg.Reporting.TLSRPT.SendReports,
+			ReportTime: cfg.Reporting.TLSRPT.ReportTime,
+			CleanupAge: cfg.Reporting.TLSRPT.CleanupAge,
+		})
+		if cfg.Reporting.TLSRPT.SendReports {
+			if err := tlsrptWorker.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start TLS-RPT worker: %w", err)
+			}
+			defer tlsrptWorker.Stop(ctx)
+		}
+		logger.Info("TLS-RPT reporting enabled",
+			"send_reports", cfg.Reporting.TLSRPT.SendReports,
+		)
+	}
+
 	// Start queue worker pool for outbound delivery
 	workerPool := queue.NewWorkerPool(queueMgr, queueCfg.Workers, cfg.Server.SMTP.Hostname, tlsConfig, logger)
+
+	// Set TLS tracker and MTA-STS manager on worker pool for TLS reporting
+	if tlsrptTracker != nil {
+		workerPool.SetTLSTracker(tlsrptTracker)
+	}
+	if mtastsManager != nil {
+		workerPool.SetMTASTSManager(&mtastsAdapter{mtastsManager})
+	}
 
 	// Configure DKIM signing if enabled
 	if cfg.Security.TLS.DKIM.Enabled {
@@ -281,6 +363,17 @@ func runServer() error {
 		}
 		apiServer.SetHostname(cfg.Server.SMTP.Hostname)
 
+		// Set reporting stores for API endpoints
+		if dmarcStore != nil {
+			apiServer.SetDMARCStore(dmarcStore)
+		}
+		if tlsrptStore != nil {
+			apiServer.SetTLSRPTStore(tlsrptStore)
+		}
+		if mtastsManager != nil {
+			apiServer.SetMTASTSManager(mtastsManager)
+		}
+
 		go func() {
 			if err := apiServer.Start(ctx); err != nil {
 				logger.Error("API server error", "error", err)
@@ -349,4 +442,17 @@ func showMigrationStatus() error {
 	}
 
 	return nil
+}
+
+// mtastsAdapter wraps mtasts.Manager to implement queue.MTASTSManager interface.
+type mtastsAdapter struct {
+	mgr *mtasts.Manager
+}
+
+func (a *mtastsAdapter) GetPolicy(ctx context.Context, domain string) (interface{}, error) {
+	return a.mgr.GetPolicy(ctx, domain)
+}
+
+func (a *mtastsAdapter) ShouldEnforceTLS(ctx context.Context, domain string) bool {
+	return a.mgr.ShouldEnforceTLS(ctx, domain)
 }

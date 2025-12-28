@@ -4,12 +4,13 @@ import "time"
 
 // Config is the root configuration structure
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Storage  StorageConfig  `mapstructure:"storage"`
-	Security SecurityConfig `mapstructure:"security"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
-	Filters  FiltersConfig  `mapstructure:"filters"`
-	Events   EventsConfig   `mapstructure:"events"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Storage   StorageConfig   `mapstructure:"storage"`
+	Security  SecurityConfig  `mapstructure:"security"`
+	Logging   LoggingConfig   `mapstructure:"logging"`
+	Filters   FiltersConfig   `mapstructure:"filters"`
+	Events    EventsConfig    `mapstructure:"events"`
+	Reporting ReportingConfig `mapstructure:"reporting"`
 }
 
 // ServerConfig contains all server-related settings
@@ -229,4 +230,35 @@ type WebhooksConfig struct {
 	Timeout     time.Duration `mapstructure:"timeout"`
 	MaxRetries  int           `mapstructure:"max_retries"`
 	RetryDelays []string      `mapstructure:"retry_delays"`
+}
+
+// ReportingConfig contains settings for email reporting (DMARC, TLS-RPT)
+type ReportingConfig struct {
+	DMARC  DMARCReportingConfig `mapstructure:"dmarc"`
+	TLSRPT TLSRPTConfig         `mapstructure:"tlsrpt"`
+	MTASTS MTASTSConfig         `mapstructure:"mtasts"`
+}
+
+// DMARCReportingConfig for DMARC aggregate reporting
+type DMARCReportingConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	SendReports  bool   `mapstructure:"send_reports"`
+	ReportTime   string `mapstructure:"report_time"`   // Time to generate daily reports (e.g., "02:00")
+	OrgName      string `mapstructure:"org_name"`      // Organization name for outbound reports
+	ContactEmail string `mapstructure:"contact_email"` // Contact email for reports
+}
+
+// TLSRPTConfig for TLS-RPT reporting
+type TLSRPTConfig struct {
+	Enabled     bool          `mapstructure:"enabled"`
+	SendReports bool          `mapstructure:"send_reports"`
+	ReportTime  string        `mapstructure:"report_time"` // Time to generate daily reports (e.g., "03:00")
+	CleanupAge  time.Duration `mapstructure:"cleanup_age"` // How long to keep old results
+}
+
+// MTASTSConfig for MTA-STS policy enforcement
+type MTASTSConfig struct {
+	Enabled        bool          `mapstructure:"enabled"`
+	CacheTTL       time.Duration `mapstructure:"cache_ttl"`
+	RefreshWorkers int           `mapstructure:"refresh_workers"`
 }

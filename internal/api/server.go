@@ -12,6 +12,9 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-playground/validator/v10"
 	"github.com/mnohosten/esp/internal/dkim"
+	"github.com/mnohosten/esp/internal/dmarc"
+	"github.com/mnohosten/esp/internal/mtasts"
+	"github.com/mnohosten/esp/internal/tlsrpt"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 )
 
@@ -50,6 +53,11 @@ type Server struct {
 	startTime   time.Time
 	dkimManager *dkim.KeyManager
 	hostname    string
+
+	// Reporting stores
+	dmarcStore    *dmarc.Store
+	tlsrptStore   *tlsrpt.Store
+	mtastsManager *mtasts.Manager
 }
 
 // New creates a new API server.
@@ -81,6 +89,21 @@ func (s *Server) SetDKIMManager(mgr *dkim.KeyManager) {
 // SetHostname sets the mail server hostname.
 func (s *Server) SetHostname(hostname string) {
 	s.hostname = hostname
+}
+
+// SetDMARCStore sets the DMARC store for reporting.
+func (s *Server) SetDMARCStore(store *dmarc.Store) {
+	s.dmarcStore = store
+}
+
+// SetTLSRPTStore sets the TLS-RPT store for reporting.
+func (s *Server) SetTLSRPTStore(store *tlsrpt.Store) {
+	s.tlsrptStore = store
+}
+
+// SetMTASTSManager sets the MTA-STS manager.
+func (s *Server) SetMTASTSManager(mgr *mtasts.Manager) {
+	s.mtastsManager = mgr
 }
 
 // setupRoutes configures all routes.
@@ -199,6 +222,33 @@ func (s *Server) setupRoutes() {
 				r.Get("/overview", s.handleStatsOverview)
 				r.Get("/messages", s.handleStatsMessages)
 				r.Get("/queue", s.handleStatsQueue)
+			})
+
+			// DMARC Reporting (admin only)
+			r.Route("/dmarc", func(r chi.Router) {
+				r.Use(AdminMiddleware)
+				r.Get("/reports/received", s.handleListDMARCReportsReceived)
+				r.Get("/reports/received/{reportID}", s.handleGetDMARCReportReceived)
+				r.Get("/reports/sent", s.handleListDMARCReportsSent)
+				r.Get("/stats/{domain}", s.handleGetDMARCStats)
+			})
+
+			// TLS-RPT Reporting (admin only)
+			r.Route("/tlsrpt", func(r chi.Router) {
+				r.Use(AdminMiddleware)
+				r.Get("/reports/received", s.handleListTLSRPTReportsReceived)
+				r.Get("/reports/received/{reportID}", s.handleGetTLSRPTReportReceived)
+				r.Get("/reports/sent", s.handleListTLSRPTReportsSent)
+				r.Get("/stats", s.handleGetTLSStats)
+				r.Get("/stats/{domain}", s.handleGetTLSStatsDomain)
+			})
+
+			// MTA-STS Policies (admin only)
+			r.Route("/mtasts", func(r chi.Router) {
+				r.Use(AdminMiddleware)
+				r.Get("/policies", s.handleGetMTASTSPolicies)
+				r.Get("/policies/{domain}", s.handleGetMTASTSPolicy)
+				r.Post("/policies/{domain}/refresh", s.handleRefreshMTASTSPolicy)
 			})
 		})
 

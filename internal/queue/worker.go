@@ -21,14 +21,29 @@ type DKIMSigner interface {
 	Enabled() bool
 }
 
+// TLSTracker is the interface for tracking TLS connection results.
+type TLSTracker interface {
+	RecordSuccess(ctx context.Context, domain, mx string, connState tls.ConnectionState, policy interface{})
+	RecordFailure(ctx context.Context, domain, mx string, err error, policy interface{})
+	Flush(ctx context.Context) error
+}
+
+// MTASTSManager is the interface for MTA-STS policy management.
+type MTASTSManager interface {
+	GetPolicy(ctx context.Context, domain string) (interface{}, error)
+	ShouldEnforceTLS(ctx context.Context, domain string) bool
+}
+
 // WorkerPool manages a pool of delivery workers.
 type WorkerPool struct {
-	manager    *Manager
-	workers    int
-	hostname   string
-	tlsConfig  *tls.Config
-	logger     *slog.Logger
-	dkimSigner DKIMSigner
+	manager       *Manager
+	workers       int
+	hostname      string
+	tlsConfig     *tls.Config
+	logger        *slog.Logger
+	dkimSigner    DKIMSigner
+	tlsTracker    TLSTracker
+	mtastsManager MTASTSManager
 
 	mu      sync.Mutex
 	running bool
@@ -50,6 +65,16 @@ func NewWorkerPool(manager *Manager, workers int, hostname string, tlsConfig *tl
 // SetDKIMSigner sets the DKIM signer for outgoing messages.
 func (p *WorkerPool) SetDKIMSigner(signer DKIMSigner) {
 	p.dkimSigner = signer
+}
+
+// SetTLSTracker sets the TLS tracker for reporting TLS connection results.
+func (p *WorkerPool) SetTLSTracker(tracker TLSTracker) {
+	p.tlsTracker = tracker
+}
+
+// SetMTASTSManager sets the MTA-STS manager for policy enforcement.
+func (p *WorkerPool) SetMTASTSManager(manager MTASTSManager) {
+	p.mtastsManager = manager
 }
 
 // Start starts the worker pool.
@@ -280,6 +305,21 @@ func (p *WorkerPool) resolveMX(ctx context.Context, domain string) ([]string, er
 
 // deliverToMX attempts to deliver to a specific MX host.
 func (p *WorkerPool) deliverToMX(ctx context.Context, mx string, msg *Message, content []byte) *DeliveryResult {
+	// Extract recipient domain
+	parts := strings.Split(msg.Recipient, "@")
+	recipientDomain := ""
+	if len(parts) == 2 {
+		recipientDomain = parts[1]
+	}
+
+	// Check MTA-STS policy if manager is configured
+	var stsPolicy interface{}
+	var enforceTLS bool
+	if p.mtastsManager != nil && recipientDomain != "" {
+		stsPolicy, _ = p.mtastsManager.GetPolicy(ctx, recipientDomain)
+		enforceTLS = p.mtastsManager.ShouldEnforceTLS(ctx, recipientDomain)
+	}
+
 	// Try port 25
 	addr := net.JoinHostPort(mx, "25")
 
@@ -290,6 +330,10 @@ func (p *WorkerPool) deliverToMX(ctx context.Context, mx string, msg *Message, c
 
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
+		// Record TLS failure for connection error
+		if p.tlsTracker != nil && recipientDomain != "" {
+			p.tlsTracker.RecordFailure(ctx, recipientDomain, mx, err, stsPolicy)
+		}
 		return &DeliveryResult{
 			Success:    false,
 			Permanent:  false,
@@ -305,6 +349,9 @@ func (p *WorkerPool) deliverToMX(ctx context.Context, mx string, msg *Message, c
 	// Create SMTP client
 	client, err := smtp.NewClient(conn, mx)
 	if err != nil {
+		if p.tlsTracker != nil && recipientDomain != "" {
+			p.tlsTracker.RecordFailure(ctx, recipientDomain, mx, err, stsPolicy)
+		}
 		return &DeliveryResult{
 			Success:    false,
 			Permanent:  false,
@@ -325,18 +372,65 @@ func (p *WorkerPool) deliverToMX(ctx context.Context, mx string, msg *Message, c
 	}
 
 	// Try STARTTLS if available
+	var tlsConnState *tls.ConnectionState
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		tlsConfig := &tls.Config{
 			ServerName: mx,
 			MinVersion: tls.VersionTLS12,
 		}
 		if err := client.StartTLS(tlsConfig); err != nil {
+			// Record TLS failure
+			if p.tlsTracker != nil && recipientDomain != "" {
+				p.tlsTracker.RecordFailure(ctx, recipientDomain, mx, err, stsPolicy)
+			}
+			// If MTA-STS enforces TLS, fail the delivery
+			if enforceTLS {
+				return &DeliveryResult{
+					Success:    false,
+					Permanent:  false,
+					Error:      fmt.Sprintf("STARTTLS required by MTA-STS but failed: %v", err),
+					RemoteHost: mx,
+				}
+			}
 			// Log but continue without TLS
 			p.logger.Warn("STARTTLS failed, continuing without TLS",
 				"mx", mx,
 				"error", err,
 			)
+		} else {
+			// Get TLS connection state
+			state, ok := client.TLSConnectionState()
+			if ok {
+				tlsConnState = &state
+				// Record TLS success
+				if p.tlsTracker != nil && recipientDomain != "" {
+					p.tlsTracker.RecordSuccess(ctx, recipientDomain, mx, state, stsPolicy)
+				}
+			}
 		}
+	} else {
+		// STARTTLS not supported
+		if p.tlsTracker != nil && recipientDomain != "" {
+			p.tlsTracker.RecordFailure(ctx, recipientDomain, mx, fmt.Errorf("starttls-not-supported"), stsPolicy)
+		}
+		// If MTA-STS enforces TLS, fail the delivery
+		if enforceTLS {
+			return &DeliveryResult{
+				Success:    false,
+				Permanent:  false,
+				Error:      "STARTTLS required by MTA-STS but not supported by remote server",
+				RemoteHost: mx,
+			}
+		}
+	}
+
+	// Log TLS info if connected with TLS
+	if tlsConnState != nil {
+		p.logger.Debug("TLS connection established",
+			"mx", mx,
+			"version", tlsConnState.Version,
+			"cipher", tlsConnState.CipherSuite,
+		)
 	}
 
 	// Set sender

@@ -176,7 +176,21 @@ func (s *Session) Data(r io.Reader) error {
 			)
 		}
 
-		// Queue for outbound delivery
+		// SECURITY: Only allow outbound relay for authenticated sessions
+		if !s.authenticated {
+			s.logger.Warn("rejecting relay attempt from unauthenticated session",
+				"from", s.from,
+				"recipient", recipient,
+				"remote_addr", s.conn.Conn().RemoteAddr().String(),
+			)
+			return &smtp.SMTPError{
+				Code:         550,
+				EnhancedCode: smtp.EnhancedCode{5, 7, 1},
+				Message:      "Relay access denied - authentication required",
+			}
+		}
+
+		// Queue for outbound delivery (authenticated users only)
 		outboundRecipients = append(outboundRecipients, recipient)
 	}
 
